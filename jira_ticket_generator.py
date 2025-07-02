@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import logging
 import re
+import os
 from datetime import datetime
 
 # Set up logging
@@ -18,58 +19,71 @@ class JiraTicketGenerator:
         self.technique_recommendations = self._load_technique_recommendations()
     
     def _load_technique_recommendations(self):
-        """Load MITRE ATT&CK technique recommendations"""
-        return {
-            "T1059": {  # Command and Scripting Interpreter
-                "detection": [
-                    "Monitor process command-line arguments for suspicious commands",
-                    "Analyze script content for malicious indicators",
-                    "Monitor for unusual child processes of system applications"
-                ],
-                "prevention": [
-                    "Implement application control to restrict script execution",
-                    "Use PowerShell Constrained Language Mode",
-                    "Block unsigned or untrusted scripts"
-                ]
-            },
-            "T1055": {  # Process Injection
-                "detection": [
-                    "Monitor for suspicious process memory manipulation",
-                    "Track processes accessing memory of other processes",
-                    "Monitor for unusual DLL loading in process space"
-                ],
-                "prevention": [
-                    "Utilize application control policies",
-                    "Enable Exploit Protection/Process Mitigations",
-                    "Keep systems patched against known vulnerabilities"
-                ]
-            },
-            "T1027": {  # Obfuscated Files or Information
-                "detection": [
-                    "Use anti-malware scanning for known obfuscation techniques",
-                    "Monitor for suspicious file modifications",
-                    "Analyze files with low prevalence in the environment"
-                ],
-                "prevention": [
-                    "Implement integrity checking for executables and scripts",
-                    "Use application control for unauthorized file execution",
-                    "Deploy network-based anti-malware inspection"
-                ]
-            },
-            "T1003": {  # OS Credential Dumping
-                "detection": [
-                    "Monitor for access to LSASS process memory",
-                    "Track reading of SAM/NTDS.dit files",
-                    "Look for creation of minidump files"
-                ],
-                "prevention": [
-                    "Implement credential guard to protect LSASS",
-                    "Use Protected Process Light for LSASS",
-                    "Restrict access to domain controllers"
-                ]
+        """
+        Load technique recommendations from the JSON file.
+
+        Returns:
+            dict: A dictionary mapping technique IDs to their detection and prevention methods.
+        """
+        recommendations = {}
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_file_path = os.path.join(current_dir, 'mitre_techniques_data_summary.json')
+
+        try:
+            with open(json_file_path, 'r', encoding='utf-8') as f:
+                techniques_data = json.load(f)
+
+            # The JSON is structured as a dictionary with technique IDs as keys
+            for technique_id, technique_data in techniques_data.items():
+                if not technique_id:
+                    continue
+                
+                # Extract detection descriptions
+                detection = []
+                
+                # Get detections from the detections array
+                if 'detections' in technique_data and technique_data['detections']:
+                    for detect_item in technique_data['detections']:
+                        if 'description' in detect_item and detect_item['description']:
+                            detection.append(detect_item['description'])
+                
+                # If no specific detections found, try the generic_detection field
+                if not detection and 'generic_detection' in technique_data and technique_data['generic_detection']:
+                    detection.append(technique_data['generic_detection'])
+                
+                # If still no detections, add a generic one
+                if not detection:
+                    detection = ["Monitor for suspicious activity related to this technique."]
+                
+                # Extract prevention descriptions from mitigations
+                prevention = []
+                if 'mitigations' in technique_data and technique_data['mitigations']:
+                    for mitigation in technique_data['mitigations']:
+                        if 'description' in mitigation and mitigation['description']:
+                            prevention.append(mitigation['description'])
+                
+                # If no specific preventions, add a generic one
+                if not prevention:
+                    prevention = ["Implement security controls to prevent this technique."]
+                
+                # Store recommendations
+                recommendations[technique_id] = {
+                    "detection": detection,
+                    "prevention": prevention
+                }
+
+            logger.info(f"Loaded recommendations for {len(recommendations)} techniques")
+            return recommendations
+        
+        except Exception as e:
+            logger.error(f"Error loading technique recommendations: {str(e)}")
+            # Return a minimal default dictionary if loading fails
+            return {
+                "T1059": {
+                    "detection": ["Monitor for suspicious command-line activities."],
+                    "prevention": ["Implement application control solutions."]
+                }
             }
-            # More techniques can be added here
-        }
     
     def safe_read_csv(self, path):
         """Safely read CSV files with appropriate encoding"""
@@ -107,7 +121,7 @@ class JiraTicketGenerator:
                     logger.error(f"Error generating ticket for scenario {scenario.get('Scenario ID', 'unknown')}: {str(e)}")
             
             return tickets
-            
+        
         except Exception as e:
             logger.error(f"Error generating tickets: {str(e)}")
             raise
@@ -160,11 +174,11 @@ class JiraTicketGenerator:
         techniques = []
         if techniques_str and techniques_str.lower() != 'nan':
             techniques = [t.strip() for t in techniques_str.split(',') if t.strip()]
-            
+        
         sub_techniques = []
         if sub_techniques_str and sub_techniques_str.lower() != 'nan':
             sub_techniques = [t.strip() for t in sub_techniques_str.split(',') if t.strip()]
-            
+        
         tactics = []
         if tactics_str and tactics_str.lower() != 'nan':
             tactics = [t.strip() for t in tactics_str.split(',') if t.strip()]
@@ -183,7 +197,7 @@ class JiraTicketGenerator:
         """Extract technique ID from technique string (e.g., 'T1059 Command and...' -> 'T1059')"""
         if not technique_string:
             return ""
-            
+        
         match = re.search(r'(T\d{4}(?:\.\d{3})?)', technique_string)
         return match.group(1) if match else technique_string
     
@@ -211,7 +225,7 @@ class JiraTicketGenerator:
         """Extract relevant details from observables"""
         if observables.empty:
             return []
-            
+        
         observable_details = []
         
         for _, observable in observables.iterrows():
@@ -258,6 +272,12 @@ class JiraTicketGenerator:
             # Add recommendations if available
             if base_id in self.technique_recommendations:
                 rec = self.technique_recommendations[base_id]
+                detection.extend(rec["detection"])
+                prevention.extend(rec["prevention"])
+            
+            # Also check for the full technique ID including sub-technique
+            if technique_id in self.technique_recommendations:
+                rec = self.technique_recommendations[technique_id]
                 detection.extend(rec["detection"])
                 prevention.extend(rec["prevention"])
         

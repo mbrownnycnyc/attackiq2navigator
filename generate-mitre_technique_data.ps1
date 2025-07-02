@@ -42,15 +42,28 @@ foreach ($obj in $enterpriseAttackData.objects) {
                     attackPatternId = $obj.id
                     name = $obj.name
                     description = if ($obj.PSObject.Properties.Name -contains "description") { $obj.description } else { "" }
+                    x_mitre_data_sources = if ($obj.PSObject.Properties.Name -contains "x_mitre_data_sources") { $obj.x_mitre_data_sources } else { @() }
                     generic_detection = if ($obj.PSObject.Properties.Name -contains "x_mitre_detection") { $obj.x_mitre_detection } else { "" }
                     detections = @()
                     mitigations = @()
+                    is_subtechnique = if ($obj.PSObject.Properties.Name -contains "x_mitre_is_subtechnique") { $obj.x_mitre_is_subtechnique } else { $false }
+                    parent_technique_id = $null
                 }
                 
                 $techniqueByExternalId[$ref.external_id] = $techniqueInfo
                 $techniqueByAttackPatternId[$obj.id] = $techniqueInfo
                 break
             }
+        }
+    }
+}
+
+# Identify parent-child relationships for subtechniques
+foreach ($externalId in $techniqueByExternalId.Keys) {
+    if ($externalId -match "^T\d+\.\d+$") {
+        $parentId = $externalId -replace "\.\d+$", ""
+        if ($techniqueByExternalId.ContainsKey($parentId)) {
+            $techniqueByExternalId[$externalId].parent_technique_id = $parentId
         }
     }
 }
@@ -94,174 +107,70 @@ foreach ($obj in $enterpriseAttackData.objects) {
 
 Write-Host "Processed $relationshipCount mitigation relationships" -ForegroundColor Cyan
 
-# Define predefined detections for specific techniques
-$predefinedDetections = @{
-    "T1610" = @(
-        @{
-            name = "Application Log\Application Log Content"
-            description = "Monitor application logs for any unexpected or suspicious container deployment activities through the management API or service-specific logs (e.g., Docker Daemon logs, Kubernetes event logs).`n`nAnalytic 1 - Container creation and start activities in Docker and Kubernetes`n`n<code>sourcetype=docker:daemon OR sourcetype=kubernetes:event`n| where action IN (""create"", ""start"")`n </code>"
-        },
-        @{
-            name = "Container\Container Creation"
-            description = "Monitor container creation to detect suspicious or unknown images being deployed. Ensure that only authorized images are being used in the environment, especially in sensitive areas.`n`nAnalytic 1 - Creation of unexpected or unauthorized containers`n`n<code>sourcetype=docker:daemon OR sourcetype=kubernetes:event search action=""create""`n| where image NOT IN (""known_images_list"")`n</code>"
-        },
-        @{
-            name = "Container\Container Start"
-            description = "Monitor for the start of containers, especially those not aligned with expected images or known administrative schedules.`n`nAnalytic 1 - Unexpected container starts`n`n<code>sourcetype=docker:daemon OR sourcetype=kubernetes:event search action=""start""`n| where user NOT IN (""known_admins"")`n </code>"
-        },
-        @{
-            name = "Pod\Pod Creation"
-            description = "Monitor for newly constructed pods that may deploy a container into an environment to facilitate execution or evade defenses."
-        },
-        @{
-            name = "Pod\Pod Modification"
-            description = "Monitor for changes made to pods for unexpected modifications to settings and/or control data that may deploy a container into an environment to facilitate execution or evade defenses."
-        }
-    )
-    # Add other technique IDs as needed
-}
-
-# Define valid data source and component combinations
-$validCombinations = @{
-    "Container" = @("Container Creation", "Container Start")
-    "Pod" = @("Pod Creation", "Pod Modification")
-    "Application Log" = @("Application Log Content")
-}
-
-# Process detection information
+# Process detection information directly from x_mitre_detection field
 Write-Host "Processing detection information..." -ForegroundColor Cyan
+
 foreach ($externalId in $techniqueByExternalId.Keys) {
     $technique = $techniqueByExternalId[$externalId]
-    $detectionText = $technique.generic_detection
     
-    # Use predefined detections if available for this technique
-    if ($predefinedDetections.ContainsKey($externalId)) {
-        foreach ($detection in $predefinedDetections[$externalId]) {
-            $technique.detections += $detection
-        }
-        continue  # Skip to next technique since we've added all predefined detections
-    }
-    
-    # Skip if no detection text for further processing
-    if ([string]::IsNullOrWhiteSpace($detectionText)) {
-        continue
-    }
-    
-    # First, try to extract structured Data Source/Data Component patterns
-    $regex = [regex]"(?mi)Data Source:\s*([^\r\n,]+)(?:[^\r\n]*?)Data Component:\s*([^\r\n,]+)(?:[^\r\n]*?)(?:Detection|Monitor|Detect):\s*([^\r\n](?:.|[\r\n])*?(?=(?:Data Source:|$)))"
-    $matches = $regex.Matches($detectionText)
-    
-    $detectionFound = $false
-    
-    if ($matches.Count -gt 0) {
-        foreach ($match in $matches) {
-            if ($match.Groups.Count -ge 4) {
-                $dataSource = $match.Groups[1].Value.Trim()
-                $dataComponent = $match.Groups[2].Value.Trim()
-                $detectionDesc = $match.Groups[3].Value.Trim()
+    # If there's detection information in the generic_detection field, create a detection entry
+    if (-not [string]::IsNullOrEmpty($technique.generic_detection)) {
+        # Create detection entries based on data sources
+        if ($technique.x_mitre_data_sources -and $technique.x_mitre_data_sources.Count -gt 0) {
+            # Process each data source and create a detection entry for it
+            foreach ($dataSource in $technique.x_mitre_data_sources) {
+                # Parse data source to extract main category and component if possible
+                if ($dataSource -match "([^:]+):\s*([^:]+)") {
+                    $dataSourceMain = $matches[1].Trim()
+                    $dataComponent = $matches[2].Trim()
+                    $name = "$dataSourceMain\$dataComponent"
+                } else {
+                    # Handle cases where the format doesn't match the expected pattern
+                    $parts = $dataSource.Split(':')
+                    if ($parts.Length -ge 2) {
+                        $dataSourceMain = $parts[0].Trim()
+                        $dataComponent = $parts[1].Trim()
+                        $name = "$dataSourceMain\$dataComponent"
+                    } else {
+                        # For data sources without a clear component
+                        $name = "$dataSource\Activity"
+                    }
+                }
                 
-                $name = "$dataSource\$dataComponent"
-                
+                # Add a detection entry using the generic detection text
                 $technique.detections += @{
                     name = $name
-                    description = $detectionDesc
-                }
-                
-                $detectionFound = $true
-            }
-        }
-    }
-    
-    # Look for analytics in the text
-    $analyticMatches = [regex]::Matches($detectionText, "(?is)Analytic\s*\d+.*?<code>([^<]+)</code>")
-    
-    if ($analyticMatches.Count -gt 0) {
-        foreach ($match in $analyticMatches) {
-            $analyticText = $match.Value
-            
-            # Try to extract a title for the analytic
-            $titleMatch = [regex]::Match($analyticText, "(?i)Analytic\s*\d+\s*[-:]\s*([^\r\n<]+)")
-            $title = if ($titleMatch.Success) {
-                $titleMatch.Groups[1].Value.Trim()
-            } else {
-                "Analytic"
-            }
-            
-            # Try to determine data source and component from the title
-            $dataSource = "Analytic"
-            $dataComponent = $title
-            
-            # Find known data sources in the title
-            foreach ($ds in $validCombinations.Keys) {
-                if ($title -match [regex]::Escape($ds)) {
-                    $dataSource = $ds
-                    break
+                    description = $technique.generic_detection
                 }
             }
-            
-            # Find known components in the title
-            foreach ($ds in $validCombinations.Keys) {
-                foreach ($dc in $validCombinations[$ds]) {
-                    if ($title -match [regex]::Escape($dc)) {
-                        $dataComponent = $dc
-                        $dataSource = $ds  # Ensure matching data source
-                        break
-                    }
-                }
-            }
-            
-            $name = "$dataSource\$dataComponent"
-            
+        } 
+        # If no data sources but we have detection text, create a generic detection entry
+        elseif (-not [string]::IsNullOrEmpty($technique.generic_detection)) {
             $technique.detections += @{
-                name = $name
-                description = $analyticText
+                name = "Generic Detection"
+                description = $technique.generic_detection
             }
-            
-            $detectionFound = $true
         }
     }
     
-    # If no analytics found, try to use predefined valid combinations if they're mentioned in the text
-    if (-not $detectionFound) {
-        foreach ($dataSource in $validCombinations.Keys) {
-            if ($detectionText -match [regex]::Escape($dataSource)) {
-                foreach ($dataComponent in $validCombinations[$dataSource]) {
-                    if ($detectionText -match [regex]::Escape($dataComponent)) {
-                        $name = "$dataSource\$dataComponent"
-                        
-                        # Try to extract a specific section that mentions this combination
-                        $pattern = "(?i)(?:[^\r\n.]*$dataSource[^\r\n.]*$dataComponent[^\r\n.]*|[^\r\n.]*$dataComponent[^\r\n.]*$dataSource[^\r\n.]*)([^.]+\.)"
-                        $specificMatch = [regex]::Match($detectionText, $pattern)
-                        
-                        $description = if ($specificMatch.Success) {
-                            $specificMatch.Groups[1].Value.Trim()
-                        } else {
-                            # Use the first paragraph as fallback
-                            $firstPara = if ($detectionText -match "^([^\r\n]+)") {
-                                $matches[1]
-                            } else {
-                                $detectionText
-                            }
-                            $firstPara
-                        }
-                        
-                        $technique.detections += @{
-                            name = $name
-                            description = $description
-                        }
-                        
-                        $detectionFound = $true
-                    }
+    # If technique is a subtechnique and has no detections, inherit from parent
+    if ($technique.is_subtechnique -and $technique.detections.Count -eq 0 -and $technique.parent_technique_id) {
+        $parentTechnique = $techniqueByExternalId[$technique.parent_technique_id]
+        if ($parentTechnique -and $parentTechnique.detections.Count -gt 0) {
+            foreach ($detection in $parentTechnique.detections) {
+                $technique.detections += @{
+                    name = "$($detection.name) (Inherited from $($technique.parent_technique_id))"
+                    description = $detection.description
                 }
             }
         }
     }
     
-    # If still no detections found, create a generic one
-    if (-not $detectionFound) {
+    # If still no detections but we have generic detection text, create a generic detection entry
+    if ($technique.detections.Count -eq 0 -and -not [string]::IsNullOrEmpty($technique.generic_detection)) {
         $technique.detections += @{
-            name = "Generic\Detection"
-            description = $detectionText
+            name = "Generic Detection"
+            description = $technique.generic_detection
         }
     }
 }
