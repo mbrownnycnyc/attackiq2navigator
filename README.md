@@ -1,5 +1,7 @@
 # 🚍 AttackIQ CSV Processor 📊
 
+![Image](https://github.com/user-attachments/assets/e9ec552c-2bc5-4396-ba62-68e90c246df9)
+
 ## 🌝 Project Overview
 
 This tool processes AttackIQ security validation data and maps it to the MITRE ATT&CK framework. It provides two main functionalities:
