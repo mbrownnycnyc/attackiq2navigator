@@ -2,12 +2,17 @@
 
 ![Image](https://github.com/user-attachments/assets/e9ec552c-2bc5-4396-ba62-68e90c246df9)
 
-## 🌝 Project Overview
+## Project Overview
 
 This tool processes AttackIQ security validation data and maps it to the MITRE ATT&CK framework. It provides two main functionalities:
 
-1. 👩 **ATT&CK Navigator Layer Generation**: Creates visualizations for security coverage based on test results
-2. 👮 **Jira Ticket Creation**: Automatically generates structured Jira tickets for failed security tests
+1. **ATT&CK Navigator Layer Generation**: Creates visualizations for security coverage based on test results
+2. **Jira Ticket Creation**: Automatically generates structured Jira tickets for failed security tests
+
+## Demo site
+
+* [Demo](https://mbrownnycnyc.github.io/attackiq2navigator_site) based on [dfe7e31ba2b3e7fb607b4d2d20e73ce7a8584e68](https://github.com/mbrownnycnyc/attackiq2navigator/commit/dfe7e31ba2b3e7fb607b4d2d20e73ce7a8584e68).
+
 
 ## 💠 Quick Setup
 
@@ -62,7 +67,7 @@ python app.py
 
 ## 🔷 Making It Production-Ready
 
-### 🎾�`Production Considerations
+### 🎾 Production Considerations
 
 1. **Secure the Application**:
    - Add authentication for the web interface
@@ -122,8 +127,3 @@ Upload AttackIQ CSV files and select the "Jira Tickets for Failed Tests" option 
 ## 🔩 Contributing
 
 Contributions welcome! Please feel free to submit a Pull Request.
-
-## 📘 License
-
-Copyright © 2025
-
