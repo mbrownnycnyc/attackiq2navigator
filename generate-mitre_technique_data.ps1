@@ -2,7 +2,7 @@
 
 param(
     [string]$CTIRepoPath = ".\cti",
-    [string]$OutputFilePath = ".\mitre_techniques_data.json"
+    [string]$OutputFilePath = ".\mitre_techniques_data_summary.json"
 )
 
 # Check if the CTI repo exists
@@ -81,31 +81,80 @@ foreach ($obj in $enterpriseAttackData.objects) {
     }
 }
 
+# Create a lookup for data components (for detections)
+Write-Host "Building data component lookup..." -ForegroundColor Cyan
+$dataComponentLookup = @{}
+foreach ($obj in $enterpriseAttackData.objects) {
+    if ($obj.type -eq "x-mitre-data-component") {
+        $dataComponentLookup[$obj.id] = @{
+            id = $obj.id
+            name = $obj.name
+        }
+    }
+}
+
 # Process relationship objects directly from enterprise-attack.json
 Write-Host "Processing relationships from enterprise-attack.json..." -ForegroundColor Cyan
-$relationshipCount = 0
+$mitigationRelCount = 0
+$detectionRelCount = 0
 
 foreach ($obj in $enterpriseAttackData.objects) {
-    if ($obj.type -eq "relationship" -and $obj.relationship_type -eq "mitigates") {
-        $relationshipCount++
-        
-        $targetRef = $obj.target_ref
-        $sourceRef = $obj.source_ref
-        
-        # Check if this relationship connects a mitigation to a technique
-        if ($techniqueByAttackPatternId.ContainsKey($targetRef) -and $mitigationLookup.ContainsKey($sourceRef)) {
-            # Get the contextual description from the relationship object if available
-            $contextualDescription = if ($obj.PSObject.Properties.Name -contains "description") { $obj.description } else { $mitigationLookup[$sourceRef].description }
+    if ($obj.type -eq "relationship") {
+        # Process mitigations
+        if ($obj.relationship_type -eq "mitigates") {
+            $mitigationRelCount++
             
-            $techniqueByAttackPatternId[$targetRef].mitigations += @{
-                name = $mitigationLookup[$sourceRef].name
-                description = $contextualDescription
+            $targetRef = $obj.target_ref
+            $sourceRef = $obj.source_ref
+            
+            # Check if this relationship connects a mitigation to a technique
+            if ($techniqueByAttackPatternId.ContainsKey($targetRef) -and $mitigationLookup.ContainsKey($sourceRef)) {
+                # Get the contextual description from the relationship object if available
+                $contextualDescription = if ($obj.PSObject.Properties.Name -contains "description") { $obj.description } else { $mitigationLookup[$sourceRef].description }
+                
+                $techniqueByAttackPatternId[$targetRef].mitigations += @{
+                    name = $mitigationLookup[$sourceRef].name
+                    description = $contextualDescription
+                }
+            }
+        }
+        
+        # Process detections - THIS IS THE NEW CODE TO HANDLE DETECTIONS
+        elseif ($obj.relationship_type -eq "detects") {
+            $detectionRelCount++
+            
+            $targetRef = $obj.target_ref
+            $sourceRef = $obj.source_ref
+            
+            # Check if this relationship connects a detection to a technique
+            if ($techniqueByAttackPatternId.ContainsKey($targetRef)) {
+                $detectionName = "Detection"
+                
+                # If the source is a data component, use its name
+                if ($dataComponentLookup.ContainsKey($sourceRef)) {
+                    $dataComponent = $dataComponentLookup[$sourceRef]
+                    $parts = $dataComponent.name -split '\\'
+                    if ($parts.Length -ge 2) {
+                        $detectionName = "$($parts[0])\$($parts[1])"
+                    } else {
+                        $detectionName = "$($dataComponent.name)\Detection"
+                    }
+                }
+                
+                # Get the description from the relationship object
+                $detectionDescription = if ($obj.PSObject.Properties.Name -contains "description") { $obj.description } else { "" }
+                
+                # Add the detection to the technique
+                $techniqueByAttackPatternId[$targetRef].detections += @{
+                    name = $detectionName
+                    description = $detectionDescription
+                }
             }
         }
     }
 }
 
-Write-Host "Processed $relationshipCount mitigation relationships" -ForegroundColor Cyan
+Write-Host "Processed $mitigationRelCount mitigation relationships and $detectionRelCount detection relationships" -ForegroundColor Cyan
 
 # Process detection information directly from x_mitre_detection field
 Write-Host "Processing detection information..." -ForegroundColor Cyan
@@ -113,8 +162,8 @@ Write-Host "Processing detection information..." -ForegroundColor Cyan
 foreach ($externalId in $techniqueByExternalId.Keys) {
     $technique = $techniqueByExternalId[$externalId]
     
-    # If there's detection information in the generic_detection field, create a detection entry
-    if (-not [string]::IsNullOrEmpty($technique.generic_detection)) {
+    # If there's detection information in the generic_detection field and no detections from relationships, create a detection entry
+    if (-not [string]::IsNullOrEmpty($technique.generic_detection) -and $technique.detections.Count -eq 0) {
         # Create detection entries based on data sources
         if ($technique.x_mitre_data_sources -and $technique.x_mitre_data_sources.Count -gt 0) {
             # Process each data source and create a detection entry for it
@@ -147,7 +196,7 @@ foreach ($externalId in $techniqueByExternalId.Keys) {
         # If no data sources but we have detection text, create a generic detection entry
         elseif (-not [string]::IsNullOrEmpty($technique.generic_detection)) {
             $technique.detections += @{
-                name = "Generic Detection"
+                name = "Generic\Detection"
                 description = $technique.generic_detection
             }
         }
@@ -169,7 +218,7 @@ foreach ($externalId in $techniqueByExternalId.Keys) {
     # If still no detections but we have generic detection text, create a generic detection entry
     if ($technique.detections.Count -eq 0 -and -not [string]::IsNullOrEmpty($technique.generic_detection)) {
         $technique.detections += @{
-            name = "Generic Detection"
+            name = "Generic\Detection"
             description = $technique.generic_detection
         }
     }

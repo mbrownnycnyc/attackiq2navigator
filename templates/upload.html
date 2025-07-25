@@ -8,10 +8,22 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <style>
+    /* Add scaling to make template 75% smaller */
+    html {
+        transform: scale(0.90);
+        transform-origin: 0 0;
+        width: 133.33%; /* 1/0.75 = 1.3333... */
+        height: 133.33%;
+    }
+    body {
+        width: 75%;
+        margin: 0 auto;
+    }
+    
     :root {
-      /* Dark theme (default) */
-     --primary-color: #ff9e2c; /* Brighter Orange for dark theme */
-     --secondary-color: #aaaa; /* Light Grey */
+    /* Dark theme (default) */
+    --primary-color: #ff9e2c; /* Brighter Orange for dark theme */
+    --secondary-color: #aaaa; /* Light Grey */
     --accent-color: #ff5252; /* Bright Red */
     --bg-color: #121212; /* Very Dark Gray */
     --container-bg: #2d2d2d; /* Dark Gray */
@@ -21,8 +33,8 @@
     }
     /* Light theme variables (will be applied via JS) */
     .light-theme {
-     --primary-color: #ff7d00; /* Orange */
-        --secondary-color: #5555; /* Dark Grey */
+    --primary-color: #ff7d00; /* Orange */
+    --secondary-color: #5555; /* Dark Grey */
     --accent-color: #e60000; /* Red */
     --bg-color: #f5f5f5; /* Light Gray */
     --container-bg: #ffff; /* White */
@@ -99,7 +111,42 @@
     margin-bottom: 20px;
     background-color: rgba(255, 158, 44, 0.1);
     transition: all 0.3s ease;
+    position: relative;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
     }
+    
+    /* Enhanced drop zone styles */
+    .file-upload.drag-over {
+        background-color: rgba(255, 158, 44, 0.3);
+        border-style: solid;
+    }
+    
+    .file-upload-text {
+        text-align: center;
+        margin-bottom: 10px;
+    }
+    
+    .file-upload input[type="file"] {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        top: 0;
+        left: 0;
+        opacity: 0;
+        cursor: pointer;
+    }
+    
+    .file-name {
+        margin-top: 10px;
+        font-weight: bold;
+        word-break: break-all;
+    }
+    
     .accent-text {
     color: var(--accent-color);
     font-weight: bold;
@@ -125,7 +172,7 @@
     }
     .step-indicator {
     background-color: var(--primary-color);
-    color: #ffffff;
+    color: #ffff;
     border-radius: 50%;
     width: 28px;
     height: 28px;
@@ -212,7 +259,7 @@
     padding: 10px 15px;
     margin: 0;
     background-color: var(--primary-color);
-    color: #ffffff;
+    color: #ffff;
     font-weight: 600;
     display: flex;
     align-items: center;
@@ -272,7 +319,7 @@
     padding: 4px 8px;
     border-radius: 4px;
     font-weight: bold;
-    color: #ffffff;
+    color: #ffff;
     min-width: 60px;
     text-align: center;
     }
@@ -336,39 +383,49 @@
     <form method="post" enctype="multipart/form-data">
     <div class="mb-4">
     <label for="scenario" class="form-label">AttackIQ Scenario Activity Report:</label>
-    <div class="file-upload">
-    <input class="form-control" type="file" id="scenario" name="scenario">
-    <small class="text-muted">Upload the Scenario Activity Report CSV that contains test outcomes and MITRE technique mappings</small>
+    <div class="file-upload" id="scenarioDropZone">
+        <div class="file-upload-text">
+            <i class="bi bi-cloud-arrow-up fs-3"></i>
+            <p>Drag & drop your Scenario Activity Report CSV file here<br>or click to browse</p>
+        </div>
+        <div class="file-name" id="scenarioFileName"></div>
+        <input class="form-control" type="file" id="scenario" name="scenario">
     </div>
+    <small class="text-muted">Upload the Scenario Activity Report CSV that contains test outcomes and MITRE technique mappings</small>
     </div>
     
     <div class="mb-4">
     <label for="observable" class="form-label">AttackIQ Observable Details:</label>
-    <div class="file-upload">
-    <input class="form-control" type="file" id="observable" name="observable">
-    <small class="text-muted">Upload the Observable Details Objects CSV that contains detailed telemetry from test executions</small>
+    <div class="file-upload" id="observableDropZone">
+        <div class="file-upload-text">
+            <i class="bi bi-cloud-arrow-up fs-3"></i>
+            <p>Drag & drop your Observable Details Objects CSV file here<br>or click to browse</p>
+        </div>
+        <div class="file-name" id="observableFileName"></div>
+        <input class="form-control" type="file" id="observable" name="observable">
     </div>
+    <small class="text-muted">Upload the Observable Details Objects CSV that contains detailed telemetry from test executions</small>
     </div>
     
     <div class="output-info">
-      <h6><span class="step-indicator">2</span>Processing Outcome</h6>
-      
-      <p>After uploading, the system will generate an ATT&amp;CK Navigator layer JSON file that visualizes your security coverage based on the AttackIQ test results.</p>
-      
-      <div class="scoring-methodology mt-3">
-        <h6 class="scoring-title"><i class="bi bi-graph-up"></i> Intelligent Scoring Methodology</h6>
-        <div class="scoring-details p-3">
-        <p class="fw-bold mb-2">Each MITRE ATT&CK technique is scored on a scale of 0-100 based on:</p>
-          <div class="formula-container text-center py-2 mb-3">
-          <span class="formula">Score = <span class="highlight-text">(Number of "Passed" Tests / Total Tests) * 100</span></span>
-          </div>
-        <ul class="score-explanation mb-0">
-        <li><span class="score-example low-score">0-33</span> <span class="explanation">Limited defense coverage</span></li>
-        <li><span class="score-example medium-score">34-66</span> <span class="explanation">Partial defense coverage</span></li>
-        <li><span class="score-example high-score">67-100</span> <span class="explanation">Strong defense coverage</span></li>
-        </ul>
-        </div>
-      </div>
+    <h6><span class="step-indicator">2</span>Processing Outcome</h6>
+    
+    <p>After uploading, the system will generate an ATT&amp;CK Navigator layer JSON file that visualizes your security coverage based on the AttackIQ test results.</p>
+    
+    <div class="scoring-methodology mt-3">
+    <h6 class="scoring-title"><i class="bi bi-graph-up"></i> Intelligent Scoring Methodology</h6>
+    <div class="scoring-details p-3">
+    <p class="fw-bold mb-2">Each MITRE ATT&CK technique is scored on a scale of 0-100 based on:</p>
+    <div class="formula-container text-center py-2 mb-3">
+    <span class="formula">Score = <span class="highlight-text">(Number of "Passed" Tests / Total Tests) * 100</span></span>
+    </div>
+    <ul class="score-explanation mb-0">
+    <li><span class="score-example low-score">0-33</span> <span class="explanation">Limited defense coverage</span></li>
+    <li><span class="score-example medium-score">34-66</span> <span class="explanation">Partial defense coverage</span></li>
+    <li><span class="score-example high-score">67-100</span> <span class="explanation">Strong defense coverage</span></li>
+    </ul>
+    </div>
+    </div>
     </div>
     <div class="mb-4 mt-4">
    <h6><span class="step-indicator">3</span>Select Output Type</h6>
@@ -462,22 +519,27 @@ document.addEventListener('DOMContentLoaded', function() {
     const form = document.querySelector('form');
     const scenarioInput = document.getElementById('scenario');
     const observableInput = document.getElementById('observable');
+    const scenarioDropZone = document.getElementById('scenarioDropZone');
+    const observableDropZone = document.getElementById('observableDropZone');
+    const scenarioFileName = document.getElementById('scenarioFileName');
+    const observableFileName = document.getElementById('observableFileName');
     
+    // Handle form validation
     form.addEventListener('submit', function(event) {
         let valid = true;
         
         // Reset any previous error styling
-        scenarioInput.parentElement.classList.remove('border-danger');
-        observableInput.parentElement.classList.remove('border-danger');
+        scenarioDropZone.classList.remove('border-danger');
+        observableDropZone.classList.remove('border-danger');
         
         // Check if files are selected
         if (!scenarioInput.files || !scenarioInput.files[0]) {
-            scenarioInput.parentElement.classList.add('border-danger');
+            scenarioDropZone.classList.add('border-danger');
             valid = false;
         }
         
         if (!observableInput.files || !observableInput.files[0]) {
-            observableInput.parentElement.classList.add('border-danger');
+            observableDropZone.classList.add('border-danger');
             valid = false;
         }
         
@@ -494,6 +556,79 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     });
+    
+    // File input change handler for scenario
+    scenarioInput.addEventListener('change', function() {
+        if (this.files && this.files[0]) {
+            scenarioFileName.textContent = this.files[0].name;
+            scenarioDropZone.classList.remove('border-danger');
+        } else {
+            scenarioFileName.textContent = '';
+        }
+    });
+    
+    // File input change handler for observable
+    observableInput.addEventListener('change', function() {
+        if (this.files && this.files[0]) {
+            observableFileName.textContent = this.files[0].name;
+            observableDropZone.classList.remove('border-danger');
+        } else {
+            observableFileName.textContent = '';
+        }
+    });
+    
+    // Drag and drop handling for scenario
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        scenarioDropZone.addEventListener(eventName, preventDefaults, false);
+        observableDropZone.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        scenarioDropZone.addEventListener(eventName, function() {
+            this.classList.add('drag-over');
+        }, false);
+        
+        observableDropZone.addEventListener(eventName, function() {
+            this.classList.add('drag-over');
+        }, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+        scenarioDropZone.addEventListener(eventName, function() {
+            this.classList.remove('drag-over');
+        }, false);
+        
+        observableDropZone.addEventListener(eventName, function() {
+            this.classList.remove('drag-over');
+        }, false);
+    });
+    
+    scenarioDropZone.addEventListener('drop', function(e) {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        
+        if (files && files.length) {
+            scenarioInput.files = files;
+            scenarioFileName.textContent = files[0].name;
+            scenarioDropZone.classList.remove('border-danger');
+        }
+    }, false);
+    
+    observableDropZone.addEventListener('drop', function(e) {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        
+        if (files && files.length) {
+            observableInput.files = files;
+            observableFileName.textContent = files[0].name;
+            observableDropZone.classList.remove('border-danger');
+        }
+    }, false);
 });
 </script>
 </body>
