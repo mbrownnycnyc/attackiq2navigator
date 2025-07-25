@@ -257,38 +257,46 @@ class JiraTicketGenerator:
         return observable_details
     
     def _generate_recommendations(self, mitre_data):
-        """Generate detection and prevention recommendations based on MITRE techniques"""
-        detection = []
-        prevention = []
+        """Generate structured detection and prevention recommendations based on MITRE techniques"""
+        recommendations_by_technique = {}
         
         # Get unique technique IDs
         technique_ids = mitre_data.get("technique_ids", [])
         
-        # For each technique, add relevant recommendations
+        # For each technique, create a structured recommendation entry
         for technique_id in technique_ids:
             # Get base technique ID without sub-technique
             base_id = technique_id.split('.')[0] if '.' in technique_id else technique_id
             
-            # Add recommendations if available
-            if base_id in self.technique_recommendations:
-                rec = self.technique_recommendations[base_id]
-                detection.extend(rec["detection"])
-                prevention.extend(rec["prevention"])
-            
-            # Also check for the full technique ID including sub-technique
-            if technique_id in self.technique_recommendations:
-                rec = self.technique_recommendations[technique_id]
-                detection.extend(rec["detection"])
-                prevention.extend(rec["prevention"])
-        
-        # Remove duplicates
-        detection = list(set(detection))
-        prevention = list(set(prevention))
+            # Create entries for both the specific technique and base technique
+            for id_to_use in [technique_id, base_id]:
+                if id_to_use in self.technique_recommendations:
+                    rec = self.technique_recommendations[id_to_use]
+                    
+                    # Add structured recommendations
+                    if id_to_use not in recommendations_by_technique:
+                        recommendations_by_technique[id_to_use] = {
+                            "technique_id": id_to_use,
+                            "name": id_to_use,  # Can be enhanced with technique name lookup
+                            "detection": rec["detection"],
+                            "prevention": rec["prevention"]
+                        }
         
         return {
-            "detection": detection,
-            "prevention": prevention
+            "by_technique": list(recommendations_by_technique.values()),
+            "summary": {
+                "detection": self._summarize_recommendations([r["detection"] for r in recommendations_by_technique.values()]),
+                "prevention": self._summarize_recommendations([r["prevention"] for r in recommendations_by_technique.values()])
+            }
         }
+
+    def _summarize_recommendations(self, recommendation_lists):
+        """Create a summarized, deduplicated list of recommendations"""
+        # Implement more sophisticated deduplication logic here
+        # This could use fuzzy matching or other NLP techniques
+        all_recommendations = [item for sublist in recommendation_lists for item in sublist]
+        # Basic deduplication for now
+        return list(set(all_recommendations))
     
     def _generate_description(self, scenario):
         """Generate a detailed description for the Jira ticket"""
