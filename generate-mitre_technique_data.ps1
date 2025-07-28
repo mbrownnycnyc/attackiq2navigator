@@ -109,8 +109,12 @@ foreach ($obj in $enterpriseAttackData.objects) {
             
             # Check if this relationship connects a mitigation to a technique
             if ($techniqueByAttackPatternId.ContainsKey($targetRef) -and $mitigationLookup.ContainsKey($sourceRef)) {
-                # Get the contextual description from the relationship object if available
-                $contextualDescription = if ($obj.PSObject.Properties.Name -contains "description") { $obj.description } else { $mitigationLookup[$sourceRef].description }
+                # Get the contextual description from the relationship object if available, otherwise use the mitigation's description
+                $contextualDescription = if ($obj.PSObject.Properties.Name -contains "description" -and -not [string]::IsNullOrEmpty($obj.description)) { 
+                    $obj.description 
+                } else { 
+                    $mitigationLookup[$sourceRef].description 
+                }
                 
                 $techniqueByAttackPatternId[$targetRef].mitigations += @{
                     name = $mitigationLookup[$sourceRef].name
@@ -119,7 +123,7 @@ foreach ($obj in $enterpriseAttackData.objects) {
             }
         }
         
-        # Process detections - THIS IS THE NEW CODE TO HANDLE DETECTIONS
+        # Process detections
         elseif ($obj.relationship_type -eq "detects") {
             $detectionRelCount++
             
@@ -259,3 +263,6 @@ foreach ($externalId in ($techniqueByExternalId.Keys | Sort-Object)) {
 
 # Convert to JSON and save
 $results | ConvertTo-Json -Depth 10 | Out-File -FilePath $OutputFilePath -Encoding UTF8
+
+Write-Host "Successfully generated MITRE techniques data summary at: $OutputFilePath" -ForegroundColor Green
+Write-Host "Total techniques processed: $($results.Count)" -ForegroundColor Green
