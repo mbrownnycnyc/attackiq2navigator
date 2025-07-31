@@ -1,514 +1,281 @@
-import pandas as pd
-import json
-import logging
-import re
-import os
-from datetime import datetime
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+import pandas as pd
+import numpy as np
+import json
+from datetime import datetime
+from typing import Dict, List, Any, Optional
 
 class JiraTicketGenerator:
-    """
-    Generates structured Jira ticket data from AttackIQ security test results
-    """
+    def __init__(self, activity_report_path: str, observable_details_path: str):
+        """Initialize with paths to the two CSV reports"""
+        self.activity_df = pd.read_csv(activity_report_path)
+        self.observable_df = pd.read_csv(observable_details_path)
 
-    def __init__(self):
-        # Initialize technique recommendations mapping
-        self.technique_recommendations = self._load_technique_recommendations()
+    def safe_get_value(self, value: Any) -> Optional[str]:
+        """Safely get a value, returning None if it's NaN, empty, or 'nan' string"""
+        if pd.isna(value) or value == 'NaN' or str(value).lower() == 'nan' or value == '':
+            return None
+        return str(value).strip()
 
-    def _load_technique_recommendations(self):
-        """
-        Load technique recommendations from the JSON file.
+    def generate_enhanced_plain_english(self, observable_type: str, phase_name: str, 
+                                      scenario_name: str, outcome: str, raw_data: Dict) -> str:
+        """Generate plain English explanation without NaN values, only using available data"""
 
-        Returns:
-            dict: A dictionary mapping technique IDs to their detection and prevention methods.
-        """
-        recommendations = {}
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        json_file_path = os.path.join(current_dir, 'mitre_techniques_data_summary.json')
+        # Base information - only include if available
+        action_desc = f"The '{scenario_name}' scenario"
+        outcome_desc = f"which {outcome.lower()}" if self.safe_get_value(outcome) else ""
+        phase_desc = f"during the '{phase_name}' phase" if self.safe_get_value(phase_name) else ""
 
-        try:
-            with open(json_file_path, 'r', encoding='utf-8') as f:
-                techniques_data = json.load(f)
+        # Type-specific explanations using only available data
+        if observable_type == 'process':
+            command_line = self.safe_get_value(raw_data.get('command_line'))
+            process_args = self.safe_get_value(raw_data.get('x_process_arguments'))
 
-            # The JSON is structured as a dictionary with technique IDs as keys
-            for technique_id, technique_data in techniques_data.items():
-                if not technique_id:
-                    continue
+            if command_line:
+                if process_args:
+                    return f"{action_desc} {outcome_desc} {phase_desc} executed the process '{command_line}' with arguments '{process_args}'."
+                else:
+                    return f"{action_desc} {outcome_desc} {phase_desc} executed the process '{command_line}'."
+            else:
+                return f"{action_desc} {outcome_desc} {phase_desc} executed a process."
 
-                # Extract detection descriptions
-                detection = []
+        elif observable_type == 'file':
+            file_name = self.safe_get_value(raw_data.get('name'))
+            file_path = self.safe_get_value(raw_data.get('path'))
+            command_line = self.safe_get_value(raw_data.get('ioc_command_line'))
 
-                # Get detections from the detections array
-                if 'detections' in technique_data and technique_data['detections']:
-                    for detect_item in technique_data['detections']:
-                        if 'description' in detect_item and detect_item['description']:
-                            detection.append(detect_item['description'])
+            parts = []
+            if file_name and file_path:
+                parts.append(f"interacted with the file '{file_name}' located at '{file_path}'")
+            elif file_name:
+                parts.append(f"interacted with the file '{file_name}'")
+            elif file_path:
+                parts.append(f"interacted with a file at '{file_path}'")
+            else:
+                parts.append("interacted with a file")
 
-                # If no specific detections found, try the generic_detection field
-                if not detection and 'generic_detection' in technique_data and technique_data['generic_detection']:
-                    detection.append(technique_data['generic_detection'])
+            if command_line and file_name:
+                parts.append(f"(executed via: '{command_line}')")
 
-                # If still no detections, add a generic one
-                if not detection:
-                    detection = ["Monitor for suspicious activity related to this technique."]
+            return f"{action_desc} {outcome_desc} {phase_desc} {' '.join(parts)}."
 
-                # Extract prevention descriptions from mitigations
-                prevention = []
-                if 'mitigations' in technique_data and technique_data['mitigations']:
-                    for mitigation in technique_data['mitigations']:
-                        if 'description' in mitigation and mitigation['description']:
-                            prevention.append(mitigation['description'])
+        elif observable_type == 'directory':
+            dir_path = self.safe_get_value(raw_data.get('path'))
+            binary_path = self.safe_get_value(raw_data.get('ioc_binary_path'))
 
-                # If no specific preventions, add a generic one
-                if not prevention:
-                    prevention = ["Implement security controls to prevent this technique."]
+            if dir_path:
+                if binary_path:
+                    return f"{action_desc} {outcome_desc} {phase_desc} accessed the directory '{dir_path}' containing the binary '{binary_path}'."
+                else:
+                    return f"{action_desc} {outcome_desc} {phase_desc} accessed the directory '{dir_path}'."
+            else:
+                return f"{action_desc} {outcome_desc} {phase_desc} accessed a directory."
 
-                # Store recommendations
-                recommendations[technique_id] = {
-                    "detection": detection,
-                    "prevention": prevention
-                }
+        elif observable_type == 'windows-registry-key':
+            reg_key = self.safe_get_value(raw_data.get('key'))
+            reg_values = self.safe_get_value(raw_data.get('values'))
 
-            logger.info(f"Loaded recommendations for {len(recommendations)} techniques")
-            return recommendations
+            if reg_key:
+                if reg_values:
+                    return f"{action_desc} {outcome_desc} {phase_desc} modified the registry key '{reg_key}' with values '{reg_values}'."
+                else:
+                    return f"{action_desc} {outcome_desc} {phase_desc} modified the registry key '{reg_key}'."
+            else:
+                return f"{action_desc} {outcome_desc} {phase_desc} modified a registry key."
 
-        except Exception as e:
-            logger.error(f"Error loading technique recommendations: {str(e)}")
-            # Return a minimal default dictionary if loading fails
-            return {
-                "T1059": {
-                    "detection": ["Monitor for suspicious command-line activities."],
-                    "prevention": ["Implement application control solutions."]
-                }
-            }
+        elif observable_type == 'artifact':
+            payload_bin = self.safe_get_value(raw_data.get('payload_bin'))
+            md5_hash = self.safe_get_value(raw_data.get('md5'))
+            binary_path = self.safe_get_value(raw_data.get('ioc_binary_path'))
+            command_line = self.safe_get_value(raw_data.get('ioc_command_line'))
 
-    def safe_read_csv(self, path):
-        """Safely read CSV files with appropriate encoding"""
-        try:
-            return pd.read_csv(path, encoding='utf-8')
-        except UnicodeDecodeError:
-            return pd.read_csv(path, encoding='utf-16')
+            if binary_path and command_line:
+                return f"{action_desc} {outcome_desc} {phase_desc} created an artifact at '{binary_path}' executed with '{command_line}'."
+            elif binary_path:
+                return f"{action_desc} {outcome_desc} {phase_desc} created an artifact at '{binary_path}'."
+            elif md5_hash:
+                return f"{action_desc} {outcome_desc} {phase_desc} created an artifact (MD5: {md5_hash})."
+            else:
+                return f"{action_desc} {outcome_desc} {phase_desc} created an artifact as part of the attack simulation."
 
-    def generate_tickets(self, scenario_path, observable_path):
-        """Generate Jira tickets for failed security tests"""
-        try:
-            # Load CSV files
-            logger.info(f"Loading scenario data from {scenario_path}")
-            scenario_data = self.safe_read_csv(scenario_path)
+        else:
+            return f"{action_desc} {outcome_desc} {phase_desc} performed an action of type '{observable_type}'."
 
-            logger.info(f"Loading observable data from {observable_path}")
-            observable_data = self.safe_read_csv(observable_path)
+    def get_observable_details_with_explanations(self, scenario_id: str) -> List[Dict]:
+        """Extract observable details for a scenario with plain English explanations"""
+        observables = self.observable_df[self.observable_df['scenario_id'] == scenario_id]
 
-            # Filter for failed scenarios
-            failed_scenarios = scenario_data[scenario_data['Outcome'] != 'Passed']
-
-            if failed_scenarios.empty:
-                logger.info("No failed scenarios found")
-                return []
-
-            logger.info(f"Found {len(failed_scenarios)} failed scenarios")
-
-            # Generate tickets for each failed scenario
-            tickets = []
-            for _, scenario in failed_scenarios.iterrows():
-                try:
-                    ticket = self._generate_ticket(scenario, observable_data)
-                    tickets.append(ticket)
-                except Exception as e:
-                    logger.error(f"Error generating ticket for scenario {scenario.get('Scenario ID', 'unknown')}: {str(e)}")
-
-            return tickets
-
-        except Exception as e:
-            logger.error(f"Error generating tickets: {str(e)}")
-            raise
-
-    def _generate_ticket(self, scenario, observable_data):
-        """Generate a structured ticket for a failed scenario"""
-        scenario_id = scenario.get('Scenario ID', '')
-        scenario_name = scenario.get('Scenario Name', '')
-
-        # Find observables related to this scenario
-        scenario_observables = observable_data[observable_data['scenario_id'] == scenario_id]
-
-        # Extract MITRE techniques
-        techniques = self._extract_techniques(scenario)
-
-        # Create recommendations based on MITRE techniques
-        recommendations = self._generate_recommendations(techniques)
-
-        # Extract scenario details
-        scenario_details = self._extract_scenario_details(scenario)
-
-        # Extract observable details with plain English explanations
-        observable_details = self._extract_observable_details_with_explanations(scenario_observables, scenario)
-
-        # Create ticket structure
-        ticket = {
-            "title": f"Detection Gap: {scenario_name}",
-            "description": self._generate_description(scenario, observable_details),
-            "type": "Security Detection Implementation",
-            "priority": "High",
-            "scenario": scenario_details,
-            "mitre_data": techniques,
-            "observables": observable_details,
-            "recommendations": recommendations,
-            "metadata": {
-                "generated_at": datetime.now().isoformat(),
-                "source": "Microsoft Defender for Endpoint Baseline Evaluation"
-            }
-        }
-
-        return ticket
-
-    def _extract_techniques(self, scenario):
-        """Extract MITRE ATT&CK techniques from the scenario"""
-        techniques_str = str(scenario.get("MITRE Techniques", ""))
-        sub_techniques_str = str(scenario.get("MITRE Sub-techniques", ""))
-        tactics_str = str(scenario.get("MITRE Tactics", ""))
-
-        # Parse into lists
-        techniques = []
-        if techniques_str and techniques_str.lower() != 'nan':
-            techniques = [t.strip() for t in techniques_str.split(',') if t.strip()]
-
-        sub_techniques = []
-        if sub_techniques_str and sub_techniques_str.lower() != 'nan':
-            sub_techniques = [t.strip() for t in sub_techniques_str.split(',') if t.strip()]
-
-        tactics = []
-        if tactics_str and tactics_str.lower() != 'nan':
-            tactics = [t.strip() for t in tactics_str.split(',') if t.strip()]
-
-        # Extract technique IDs for easier reference
-        technique_ids = [self._extract_technique_id(t) for t in techniques + sub_techniques]
-
-        return {
-            "tactics": tactics,
-            "techniques": techniques,
-            "sub_techniques": sub_techniques,
-            "technique_ids": technique_ids
-        }
-
-    def _extract_technique_id(self, technique_string):
-        """Extract technique ID from technique string (e.g., 'T1059 Command and...' -> 'T1059')"""
-        if not technique_string:
-            return ""
-
-        match = re.search(r'(T\d{4}(?:\.\d{3})?)', technique_string)
-        return match.group(1) if match else technique_string
-
-    def _extract_scenario_details(self, scenario):
-        """Extract relevant details from a scenario"""
-        return {
-            "id": scenario.get("Scenario ID", ""),
-            "name": scenario.get("Scenario Name", ""),
-            "type": scenario.get("Scenario Type", ""),
-            "outcome": scenario.get("Outcome", ""),
-            "outcome_description": scenario.get("Outcome Description", ""),
-            "detection_results": scenario.get("Detection Results", ""),
-            "test_name": scenario.get("Test Name", ""),
-            "test_id": scenario.get("Test ID", ""),
-            "run_id": scenario.get("Run ID", ""),
-            "asset": {
-                "hostname": scenario.get("Asset Hostname", ""),
-                "ip": scenario.get("Asset IP", ""),
-                "role": scenario.get("Asset Role", ""),
-                "group": scenario.get("Asset Group", "")
-            }
-        }
-
-    def _extract_observable_details_with_explanations(self, observables, scenario):
-        """Extract relevant details from observables with plain English explanations"""
         if observables.empty:
             return []
 
-        observable_details = []
-        scenario_name = scenario.get("Scenario Name", "")
-        outcome_description = scenario.get("Outcome Description", "")
+        # Get scenario info for context
+        scenario_info = self.activity_df[self.activity_df['Scenario ID'] == scenario_id]
+        scenario_name = scenario_info.iloc[0]['Scenario Name'] if not scenario_info.empty else "Unknown Scenario"
+        outcome = scenario_info.iloc[0]['Outcome'] if not scenario_info.empty else "Unknown"
 
-        for _, observable in observables.iterrows():
-            obs_type = observable.get('type', '')
-            phase_name = observable.get('phase_name', '')
+        details = []
+        for _, obs in observables.iterrows():
+            # Prepare raw data dictionary with only non-NaN values
+            raw_data = {}
+            relevant_fields = [
+                'command_line', 'x_command_line', 'x_process_arguments', 'name', 'path',
+                'sha1', 'md5', 'sha256', 'key', 'values', 'payload_bin',
+                'ioc_binary_path', 'ioc_command_line', 'ioc_alternate_data_stream_name',
+                'image_ref'
+            ]
 
-            # Create base observable info
-            obs = {
-                "type": obs_type,
-                "phase_name": phase_name,
-                "prevention_outcome": observable.get('prevention_outcome', ''),
-                "detection_outcome": observable.get('detection_outcome', ''),
-                "raw_data": {},
-                "plain_english_explanation": ""
+            for field in relevant_fields:
+                if field in obs and self.safe_get_value(obs[field]):
+                    raw_data[field] = obs[field]
+
+            # Generate plain English explanation
+            plain_english = self.generate_enhanced_plain_english(
+                obs['type'], obs['phase_name'], scenario_name, outcome, raw_data
+            )
+
+            detail = {
+                'type': obs['type'],
+                'phase_name': self.safe_get_value(obs['phase_name']),
+                'prevention_outcome': self.safe_get_value(obs['prevention_outcome']),
+                'detection_outcome': self.safe_get_value(obs['detection_outcome']),
+                'raw_data': raw_data,
+                'plain_english_explanation': plain_english
             }
+            details.append(detail)
 
-            # Extract type-specific data and generate explanations
-            if obs_type == 'windows-registry-key':
-                obs["raw_data"] = {
-                    "key": observable.get('key', ''),
-                    "values": observable.get('values', ''),
-                    "ioc_key": observable.get('ioc_key', '')
-                }
-                obs["plain_english_explanation"] = self._generate_registry_explanation(
-                    scenario_name, outcome_description, obs["raw_data"], phase_name
-                )
+        return details
 
-            elif obs_type == 'file':
-                obs["raw_data"] = {
-                    "name": observable.get('name', ''),
-                    "path": observable.get('path', ''),
-                    "sha1": observable.get('sha-1', ''),
-                    "md5": observable.get('md5', ''),
-                    "sha256": observable.get('sha-256', ''),
-                    "ioc_binary_path": observable.get('ioc_binary path', ''),
-                    "ioc_command_line": observable.get('ioc_command line', '')
-                }
-                obs["plain_english_explanation"] = self._generate_file_explanation(
-                    scenario_name, outcome_description, obs["raw_data"], phase_name
-                )
+    def extract_mitre_data(self, row) -> Dict:
+        """Extract and parse MITRE ATT&CK data from a row"""
+        tactics = self.safe_get_value(row['MITRE Tactics'])
+        techniques = self.safe_get_value(row['MITRE Techniques'])
+        sub_techniques = self.safe_get_value(row['MITRE Sub-techniques'])
 
-            elif obs_type == 'process':
-                obs["raw_data"] = {
-                    "command_line": observable.get('command_line', ''),
-                    "x_command_line": observable.get('x_command_line', ''),
-                    "x_process_arguments": observable.get('x_process_arguments', ''),
-                    "ioc_binary_path": observable.get('ioc_binary path', ''),
-                    "ioc_command_line": observable.get('ioc_command line', ''),
-                    "image_ref": observable.get('image_ref', '')
-                }
-                obs["plain_english_explanation"] = self._generate_process_explanation(
-                    scenario_name, outcome_description, obs["raw_data"], phase_name
-                )
+        # Parse comma-separated values
+        tactics_list = [t.strip() for t in tactics.split(',')] if tactics else []
+        techniques_list = [t.strip() for t in techniques.split(',')] if techniques else []
+        sub_techniques_list = [t.strip() for t in sub_techniques.split(',')] if sub_techniques else []
 
-            elif obs_type == 'directory':
-                obs["raw_data"] = {
-                    "path": observable.get('path', ''),
-                    "ioc_binary_path": observable.get('ioc_binary path', ''),
-                    "ioc_command_line": observable.get('ioc_command line', ''),
-                    "ioc_alternate_data_stream_name": observable.get('ioc_alternate data stream name', '')
-                }
-                obs["plain_english_explanation"] = self._generate_directory_explanation(
-                    scenario_name, outcome_description, obs["raw_data"], phase_name
-                )
-
-            elif obs_type == 'artifact':
-                obs["raw_data"] = {
-                    "payload_bin": observable.get('payload_bin', ''),
-                    "md5": observable.get('md5', ''),
-                    "sha256": observable.get('sha-256', ''),
-                    "ioc_binary_path": observable.get('ioc_binary path', ''),
-                    "ioc_command_line": observable.get('ioc_command line', '')
-                }
-                obs["plain_english_explanation"] = self._generate_artifact_explanation(
-                    scenario_name, outcome_description, obs["raw_data"], phase_name
-                )
-
-            # Only add if we have meaningful data
-            if obs["raw_data"] or obs["plain_english_explanation"]:
-                observable_details.append(obs)
-
-        return observable_details
-
-    def _generate_registry_explanation(self, scenario_name, outcome_description, raw_data, phase_name):
-        """Generate plain English explanation for registry key operations"""
-        key = raw_data.get('key', '')
-        values = raw_data.get('values', '')
-
-        explanation = f"The '{scenario_name}' action which was '{outcome_description.lower()}' "
-        explanation += f"during the '{phase_name}' phase "
-
-        if key:
-            explanation += f"modified the registry key '{key}'"
-            if values and values != 'nan':
-                try:
-                    # Try to parse the values if it's a JSON-like string
-                    if isinstance(values, str) and values.startswith('['):
-                        explanation += f" with values: {values}"
-                    else:
-                        explanation += f" with value: {values}"
-                except:
-                    explanation += f" with value: {values}"
-
-        return explanation + "."
-
-    def _generate_file_explanation(self, scenario_name, outcome_description, raw_data, phase_name):
-        """Generate plain English explanation for file operations"""
-        name = raw_data.get('name', '')
-        path = raw_data.get('path', '')
-        ioc_binary_path = raw_data.get('ioc_binary_path', '')
-        ioc_command_line = raw_data.get('ioc_command_line', '')
-
-        explanation = f"The '{scenario_name}' action which was '{outcome_description.lower()}' "
-        explanation += f"during the '{phase_name}' phase "
-
-        if name:
-            explanation += f"involved the file '{name}'"
-
-        if path and path != 'nan':
-            explanation += f" located at '{path}'"
-        elif ioc_binary_path and ioc_binary_path != 'nan':
-            explanation += f" located at '{ioc_binary_path}'"
-
-        if ioc_command_line and ioc_command_line != 'nan':
-            explanation += f" executed with command line: '{ioc_command_line}'"
-
-        return explanation + "."
-
-    def _generate_process_explanation(self, scenario_name, outcome_description, raw_data, phase_name):
-        """Generate plain English explanation for process operations"""
-        command_line = raw_data.get('command_line', '')
-        x_command_line = raw_data.get('x_command_line', '')
-        ioc_binary_path = raw_data.get('ioc_binary_path', '')
-        x_process_arguments = raw_data.get('x_process_arguments', '')
-
-        explanation = f"The '{scenario_name}' action which was '{outcome_description.lower()}' "
-        explanation += f"during the '{phase_name}' phase "
-
-        # Use the most specific command line available
-        cmd_to_use = command_line or x_command_line or ioc_binary_path
-
-        if cmd_to_use and cmd_to_use != 'nan':
-            explanation += f"executed the process: '{cmd_to_use}'"
-
-            if x_process_arguments and x_process_arguments != 'nan':
-                explanation += f" with arguments: '{x_process_arguments}'"
-
-        return explanation + "."
-
-    def _generate_directory_explanation(self, scenario_name, outcome_description, raw_data, phase_name):
-        """Generate plain English explanation for directory operations"""
-        path = raw_data.get('path', '')
-        ioc_binary_path = raw_data.get('ioc_binary_path', '')
-        ioc_command_line = raw_data.get('ioc_command_line', '')
-
-        explanation = f"The '{scenario_name}' action which was '{outcome_description.lower()}' "
-        explanation += f"during the '{phase_name}' phase "
-
-        if path and path != 'nan':
-            explanation += f"accessed the directory '{path}'"
-
-        if ioc_binary_path and ioc_binary_path != 'nan':
-            explanation += f" containing binary at '{ioc_binary_path}'"
-
-        if ioc_command_line and ioc_command_line != 'nan':
-            explanation += f" with command execution: '{ioc_command_line}'"
-
-        return explanation + "."
-
-    def _generate_artifact_explanation(self, scenario_name, outcome_description, raw_data, phase_name):
-        """Generate plain English explanation for artifact operations"""
-        ioc_binary_path = raw_data.get('ioc_binary_path', '')
-        ioc_command_line = raw_data.get('ioc_command_line', '')
-        md5 = raw_data.get('md5', '')
-
-        explanation = f"The '{scenario_name}' action which was '{outcome_description.lower()}' "
-        explanation += f"during the '{phase_name}' phase "
-
-        if ioc_binary_path and ioc_binary_path != 'nan':
-            explanation += f"involved an artifact at '{ioc_binary_path}'"
-        else:
-            explanation += "involved a binary artifact"
-
-        if md5 and md5 != 'nan':
-            explanation += f" (MD5: {md5})"
-
-        if ioc_command_line and ioc_command_line != 'nan':
-            explanation += f" executed with: '{ioc_command_line}'"
-
-        return explanation + "."
-
-    def _generate_recommendations(self, mitre_data):
-        """Generate structured detection and prevention recommendations based on MITRE techniques"""
-        recommendations_by_technique = {}
-
-        # Get unique technique IDs
-        technique_ids = mitre_data.get("technique_ids", [])
-
-        # For each technique, create a structured recommendation entry
-        for technique_id in technique_ids:
-            # Get base technique ID without sub-technique
-            base_id = technique_id.split('.')[0] if '.' in technique_id else technique_id
-
-            # Create entries for both the specific technique and base technique
-            for id_to_use in [technique_id, base_id]:
-                if id_to_use in self.technique_recommendations:
-                    rec = self.technique_recommendations[id_to_use]
-
-                    # Add structured recommendations
-                    if id_to_use not in recommendations_by_technique:
-                        recommendations_by_technique[id_to_use] = {
-                            "technique_id": id_to_use,
-                            "name": id_to_use,  # Can be enhanced with technique name lookup
-                            "detection": rec["detection"],
-                            "prevention": rec["prevention"]
-                        }
+        # Combine all technique IDs
+        all_technique_ids = techniques_list + sub_techniques_list
 
         return {
-            "by_technique": list(recommendations_by_technique.values()),
-            "summary": {
-                "detection": self._summarize_recommendations([r["detection"] for r in recommendations_by_technique.values()]),
-                "prevention": self._summarize_recommendations([r["prevention"] for r in recommendations_by_technique.values()])
-            }
+            'tactics': tactics_list,
+            'techniques': techniques_list,
+            'sub_techniques': sub_techniques_list,
+            'technique_ids': all_technique_ids
         }
 
-    def _summarize_recommendations(self, recommendation_lists):
-        """Create a summarized, deduplicated list of recommendations"""
-        # Implement more sophisticated deduplication logic here
-        # This could use fuzzy matching or other NLP techniques
-        all_recommendations = [item for sublist in recommendation_lists for item in sublist]
-        # Basic deduplication for now
-        return list(set(all_recommendations))
+    def generate_enhanced_ticket_description(self, row, observable_details: List[Dict]) -> str:
+        """Generate enhanced ticket description with execution details"""
+        scenario_name = self.safe_get_value(row['Scenario Name'])
+        outcome = self.safe_get_value(row['Outcome'])
+        outcome_desc = self.safe_get_value(row['Outcome Description'])
+        detection_results = self.safe_get_value(row['Detection Results'])
+        mitre_tactics = self.safe_get_value(row['MITRE Tactics'])
+        mitre_techniques = self.safe_get_value(row['MITRE Techniques'])
+        mitre_sub_techniques = self.safe_get_value(row['MITRE Sub-techniques'])
+        hostname = self.safe_get_value(row['Asset Hostname'])
+        ip_address = self.safe_get_value(row['Asset IP'])
 
-    def _generate_description(self, scenario, observable_details):
-        """Generate a detailed description for the Jira ticket"""
-        scenario_name = scenario.get("Scenario Name", "")
-        outcome = scenario.get("Outcome", "")
-        outcome_desc = scenario.get("Outcome Description", "")
-        detection_results = scenario.get("Detection Results", "")
-
-        # Extract tactics and techniques
-        tactics_str = str(scenario.get("MITRE Tactics", ""))
-        techniques_str = str(scenario.get("MITRE Techniques", ""))
-        sub_techniques_str = str(scenario.get("MITRE Sub-techniques", ""))
-
-        tactics = [t.strip() for t in tactics_str.split(',') if t.strip() and t.lower() != 'nan']
-        techniques = [t.strip() for t in techniques_str.split(',') if t.strip() and t.lower() != 'nan']
-        sub_techniques = [t.strip() for t in sub_techniques_str.split(',') if t.strip() and t.lower() != 'nan']
-
-        # Build description
         description = f"h3. Detection Gap: {scenario_name}\n\n"
-        description += f"*Outcome:* {outcome}\n"
-        if outcome_desc and str(outcome_desc).lower() != 'nan':
+
+        if outcome:
+            description += f"*Outcome:* {outcome}\n"
+        if outcome_desc:
             description += f"*Outcome Description:* {outcome_desc}\n"
-        if detection_results and str(detection_results).lower() != 'nan':
+        if detection_results:
             description += f"*Detection Results:* {detection_results}\n"
 
-        # Add execution details section
+        # Add execution details if available
         if observable_details:
             description += "\nh4. Execution Details\n\n"
-            for i, obs in enumerate(observable_details, 1):
-                if obs.get("plain_english_explanation"):
-                    description += f"{i}. {obs['plain_english_explanation']}\n"
+            for i, detail in enumerate(observable_details, 1):
+                if detail['plain_english_explanation']:
+                    description += f"{i}. {detail['plain_english_explanation']}\n"
 
-        description += "\nh4. MITRE ATT&CK Information\n\n"
-        if tactics:
-            description += f"*Tactics:* {', '.join(tactics)}\n"
-        if techniques:
-            description += f"*Techniques:* {', '.join(techniques)}\n"
-        if sub_techniques:
-            description += f"*Sub-techniques:* {', '.join(sub_techniques)}\n"
+        # Add MITRE information if available
+        if any([mitre_tactics, mitre_techniques, mitre_sub_techniques]):
+            description += "\nh4. MITRE ATT&CK Information\n\n"
+            if mitre_tactics:
+                description += f"*Tactics:* {mitre_tactics}\n"
+            if mitre_techniques:
+                description += f"*Techniques:* {mitre_techniques}\n"
+            if mitre_sub_techniques:
+                description += f"*Sub-techniques:* {mitre_sub_techniques}\n"
 
-        # Add asset information
-        asset_hostname = scenario.get("Asset Hostname", "")
-        asset_ip = scenario.get("Asset IP", "")
-
-        if asset_hostname or asset_ip:
+        # Add asset information if available
+        if hostname or ip_address:
             description += "\nh4. Affected Asset\n\n"
-            if asset_hostname and str(asset_hostname).lower() != 'nan':
-                description += f"*Hostname:* {asset_hostname}\n"
-            if asset_ip and str(asset_ip).lower() != 'nan':
-                description += f"*IP Address:* {asset_ip}\n"
+            if hostname:
+                description += f"*Hostname:* {hostname}\n"
+            if ip_address:
+                description += f"*IP Address:* {ip_address}\n"
 
         return description
+
+    def generate_tickets_for_failed_scenarios(self) -> Dict:
+        """Generate Jira tickets for failed scenarios with enhanced details"""
+        failed_scenarios = self.activity_df[self.activity_df['Outcome'] == 'Failed']
+
+        tickets = []
+        for _, row in failed_scenarios.iterrows():
+            scenario_id = row['Scenario ID']
+            scenario_name = self.safe_get_value(row['Scenario Name'])
+
+            # Get observable details with explanations
+            observable_details = self.get_observable_details_with_explanations(scenario_id)
+
+            # Extract MITRE data
+            mitre_data = self.extract_mitre_data(row)
+
+            # Generate enhanced description
+            description = self.generate_enhanced_ticket_description(row, observable_details)
+
+            ticket = {
+                'title': f"Detection Gap: {scenario_name}",
+                'description': description,
+                'type': 'Security Detection Implementation',
+                'priority': 'High',
+                'scenario': {
+                    'id': scenario_id,
+                    'name': scenario_name,
+                    'type': self.safe_get_value(row['Scenario Type']),
+                    'outcome': self.safe_get_value(row['Outcome']),
+                    'outcome_description': self.safe_get_value(row['Outcome Description']),
+                    'detection_results': self.safe_get_value(row['Detection Results']),
+                    'test_name': self.safe_get_value(row['Test Name']),
+                    'test_id': self.safe_get_value(row['Test ID']),
+                    'run_id': self.safe_get_value(row['Run ID']),
+                    'asset': {
+                        'hostname': self.safe_get_value(row['Asset Hostname']),
+                        'ip': self.safe_get_value(row['Asset IP']),
+                        'role': self.safe_get_value(row['Asset Role']),
+                        'group': self.safe_get_value(row['Asset Group'])
+                    }
+                },
+                'mitre_data': mitre_data,
+                'observables': observable_details,
+                'metadata': {
+                    'generated_at': datetime.now().isoformat(),
+                    'source': 'Microsoft Defender for Endpoint Baseline Evaluation'
+                }
+            }
+            tickets.append(ticket)
+
+        return {'tickets': tickets}
+
+# Example usage
+if __name__ == "__main__":
+    generator = JiraTicketGenerator(
+        'Microsoft Defender for Endpoint Baseline for Default Policy Scenario Activity Report 2025-07-30 13_57.csv',
+        'observable_details_objects_202557301357.csv'
+    )
+
+    tickets = generator.generate_tickets_for_failed_scenarios()
+
+    # Save to JSON file
+    with open('corrected_jira_tickets.json', 'w') as f:
+        json.dump(tickets, f, indent=2)
+
+    print(f"Generated {len(tickets['tickets'])} tickets for failed scenarios")

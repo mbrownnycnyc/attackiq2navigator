@@ -13,7 +13,7 @@ def upload():
         scenario = request.files.get("scenario")
         observable = request.files.get("observable")
         output_type = request.form.get("output_type", "navigator")
-        
+
         # No server-side validation - frontend will handle it
         scenario_path = os.path.join(tempfile.gettempdir(), scenario.filename)
         observable_path = os.path.join(tempfile.gettempdir(), observable.filename)
@@ -26,17 +26,18 @@ def upload():
 
         if output_type == "jira":
             # Generate Jira ticket JSON for failed scenarios
-            jira_generator = JiraTicketGenerator()
-            result = {"tickets": jira_generator.generate_tickets(scenario_path, observable_path)}
+            # Pass the file paths to the constructor
+            jira_generator = JiraTicketGenerator(scenario_path, observable_path)
+            result = jira_generator.generate_tickets_for_failed_scenarios()  # Fixed method name
             output_path = os.path.join(tempfile.gettempdir(), "jira_tickets.json")
         else:
             # Generate ATT&CK Navigator layer (existing functionality)
             result = parse_attackiq_csvs(scenario_path, observable_path)
             output_path = os.path.join(tempfile.gettempdir(), "navigator_output.json")
-        
+
         with open(output_path, "w") as f:
             json.dump(result, f, indent=2)
-        
+
         return send_file(output_path, as_attachment=True)
 
     return render_template('upload.html')
