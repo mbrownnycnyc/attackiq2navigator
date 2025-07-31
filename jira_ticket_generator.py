@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import json
@@ -16,6 +15,15 @@ class JiraTicketGenerator:
         if pd.isna(value) or value == 'NaN' or str(value).lower() == 'nan' or value == '':
             return None
         return str(value).strip()
+
+    def determine_gap_type(self, detection_results: Optional[str]) -> tuple[str, str]:
+        """Determine if this is a detection gap, prevention gap, or both based on detection results"""
+        if detection_results and detection_results.strip():
+            # Detection occurred but outcome was still Failed = Prevention Gap
+            return "Prevention Gap", "Security Prevention Implementation"
+        else:
+            # No detection occurred and outcome was Failed = Both Detection and Prevention failed
+            return "Prevention and Detection Gap", "Security Detection and Prevention Implementation"
 
     def generate_enhanced_plain_english(self, observable_type: str, phase_name: str, 
                                       scenario_name: str, outcome: str, raw_data: Dict) -> str:
@@ -178,14 +186,32 @@ class JiraTicketGenerator:
         hostname = self.safe_get_value(row['Asset Hostname'])
         ip_address = self.safe_get_value(row['Asset IP'])
 
-        description = f"h3. Detection Gap: {scenario_name}\n\n"
+        # Determine gap type based on detection results
+        gap_type, _ = self.determine_gap_type(detection_results)
+
+        # Determine if attack was successful (outcome is Failed)
+        attack_successful = outcome and outcome.lower() == 'failed'
+
+        description = f"h3. {gap_type}: {scenario_name}\n\n"
 
         if outcome:
             description += f"*Outcome:* {outcome}\n"
+
+        # Add Attack Successful indicator
+        description += f"*Attack Successful:* {'True' if attack_successful else 'False'}\n"
+
         if outcome_desc:
             description += f"*Outcome Description:* {outcome_desc}\n"
         if detection_results:
             description += f"*Detection Results:* {detection_results}\n"
+
+        # Add gap-specific explanation
+        if gap_type == "Prevention Gap":
+            description += "\n*Gap Analysis:* The attack was detected but not prevented, indicating a gap in prevention capabilities.\n"
+        elif gap_type == "Prevention and Detection Gap":
+            description += "\n*Gap Analysis:* The attack was neither detected nor prevented, indicating gaps in both detection and prevention capabilities.\n"
+        else:
+            description += "\n*Gap Analysis:* The attack was not detected, indicating a gap in detection capabilities.\n"
 
         # Add execution details if available
         if observable_details:
@@ -222,6 +248,14 @@ class JiraTicketGenerator:
         for _, row in failed_scenarios.iterrows():
             scenario_id = row['Scenario ID']
             scenario_name = self.safe_get_value(row['Scenario Name'])
+            detection_results = self.safe_get_value(row['Detection Results'])
+            outcome = self.safe_get_value(row['Outcome'])
+
+            # Determine gap type and ticket type
+            gap_type, ticket_type = self.determine_gap_type(detection_results)
+
+            # Determine if attack was successful (outcome is Failed)
+            attack_successful = outcome and outcome.lower() == 'failed'
 
             # Get observable details with explanations
             observable_details = self.get_observable_details_with_explanations(scenario_id)
@@ -233,17 +267,19 @@ class JiraTicketGenerator:
             description = self.generate_enhanced_ticket_description(row, observable_details)
 
             ticket = {
-                'title': f"Detection Gap: {scenario_name}",
+                'title': f"{gap_type}: {scenario_name}",
                 'description': description,
-                'type': 'Security Detection Implementation',
+                'type': ticket_type,
                 'priority': 'High',
+                'gap_type': gap_type,  # Added for clarity
+                'attack_successful': attack_successful,  # New attribute
                 'scenario': {
                     'id': scenario_id,
                     'name': scenario_name,
                     'type': self.safe_get_value(row['Scenario Type']),
-                    'outcome': self.safe_get_value(row['Outcome']),
+                    'outcome': outcome,  # Keep original outcome value
                     'outcome_description': self.safe_get_value(row['Outcome Description']),
-                    'detection_results': self.safe_get_value(row['Detection Results']),
+                    'detection_results': detection_results,
                     'test_name': self.safe_get_value(row['Test Name']),
                     'test_id': self.safe_get_value(row['Test ID']),
                     'run_id': self.safe_get_value(row['Run ID']),
